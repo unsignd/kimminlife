@@ -4,7 +4,6 @@
   import { tweened } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
 
-  // Constants
   const CHART = {
     WIDTH: 600,
     HEIGHT: 200,
@@ -24,31 +23,24 @@
     EASING: cubicOut,
   } as const;
 
-  // Derived constants
   const spacing = (CHART.WIDTH - 2 * CHART.PADDING) / CHART.CANDLE_COUNT;
 
-  // Market state
   let price = 0.06;
   let prices = initializePrices();
   let volumes = initializeVolumes();
-  // Price pressure (positive => upward bias, negative => downward bias)
   let pressureTicks = 0;
   let pressurePerTick = 0;
-  // Track recent price direction for candle generation
   let recentPriceDirection: 'up' | 'down' | 'neutral' = 'neutral';
   let lastPriceChange = 0;
 
-  // Chart bounds
   let minPrice = 0;
   let maxPrice = 0;
 
-  // EMAs
   let ema5 = price;
   let ema10 = price;
   let ema20 = price;
   let ema200 = price;
 
-  // Animation stores
   const priceTween = tweened(price, {
     duration: ANIMATION.PRICE_DURATION,
     easing: ANIMATION.EASING,
@@ -56,7 +48,6 @@
   let priceSlide = false;
   let priceSlideTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Candle animation stores
   let bodyTopStores: any[] = [];
   let bodyHStores: any[] = [];
   let wickTopStores: any[] = [];
@@ -66,7 +57,6 @@
   let wickTopValues: number[] = Array(CHART.CANDLE_COUNT).fill(0);
   let wickBottomValues: number[] = Array(CHART.CANDLE_COUNT).fill(0);
 
-  // Trading state
   let balance = 200;
   let holdings = 0;
   let orderQty = 1;
@@ -74,7 +64,7 @@
   let toastVisible = false;
   let trades: Array<{
     id: number;
-    type: 'Buy' | 'Sell';
+    type: 'Buy' | 'Sell' | 'Liquidation';
     qty: number;
     price: number;
     time: string;
@@ -83,7 +73,9 @@
   let balanceFlashTimer: any = null;
   let tradeTimer: any = null;
 
-  // Initialization helpers
+  let entryPrice = 0;
+  let liquidationPrice = 0;
+
   function initializePrices(): number[] {
     return Array.from({ length: CHART.CANDLE_COUNT }, () => {
       const variance = (Math.random() - 0.5) * 0.01;
@@ -106,14 +98,40 @@
     ).toFixed(4);
   }
 
-  // Price update logic
+  function checkLiquidation() {
+    if (holdings <= 0) return;
+
+    const loss = ((entryPrice - price) / entryPrice) * 100;
+
+    if (loss >= 50) {
+      executeLiquidation();
+    }
+  }
+
+  function executeLiquidation() {
+    if (holdings <= 0) return;
+
+    const liquidatedQty = holdings;
+    holdings = 0;
+    entryPrice = 0;
+    liquidationPrice = 0;
+
+    addTrade('Liquidation', liquidatedQty, price);
+    showTradeMessage(
+      `⚠️ Liquidated! ${liquidatedQty.toFixed(4)} @ ${price.toFixed(4)}`
+    );
+    flashBalance('flash-liquidation');
+
+    applyPressure('up', { ticks: 30, factor: 0.4 });
+    setSustainedPressure('up', 35, 0.2);
+  }
+
   function updatePrice() {
     const prev = prices[prices.length - 1];
     const normalStep = 0.003;
     let delta: number;
 
     if (pressureTicks > 0) {
-      // pressurePerTick may be positive (push up) or negative (push down)
       const bias = pressurePerTick * (pressureTicks / (pressureTicks + 1));
       const jitter = (Math.random() - 0.5) * normalStep;
       delta = bias + jitter;
@@ -122,7 +140,6 @@
       delta = (Math.random() - 0.5) * 2 * normalStep;
     }
 
-    // If user has holdings, prevent any upward movement
     if (holdings > 0 && delta > 0) {
       delta = -Math.abs(delta);
     }
@@ -133,7 +150,6 @@
     if (candidate > PRICE_BOUNDS.MAX)
       candidate = PRICE_BOUNDS.MAX - Math.random() * 0.0005;
 
-    // Final check: if user has holdings, ensure price never goes above previous
     if (holdings > 0 && candidate > prev) {
       candidate = prev;
     }
@@ -142,7 +158,6 @@
     prices = [...prices.slice(1), next];
     volumes = [...volumes.slice(1), Math.floor(Math.random() * 200) + 6];
 
-    // Track price direction for candle generation
     lastPriceChange = next - prev;
     if (lastPriceChange > 0.001) {
       recentPriceDirection = 'up';
@@ -154,6 +169,8 @@
 
     updateEMAs(next);
     price = next;
+
+    checkLiquidation();
   }
 
   function updateEMAs(newPrice: number) {
@@ -172,28 +189,25 @@
     );
   }
 
-  // Chart calculations
   function generateCandles(prices: number[]) {
     return prices.map((close, i) => {
       const prevPrice = i > 0 ? prices[i - 1] : close;
       const priceChange = close - prevPrice;
       const priceChangePercent =
         prevPrice > 0 ? Math.abs(priceChange / prevPrice) : 0;
-      const isUp = priceChange >= 0;
 
-      // Base range - increased for more volatility
       const baseRange = Math.max(prevPrice * 0.15, 0.005);
 
-      // For strong moves, create more dramatic candles
       let open: number;
       let high: number;
       let low: number;
 
-      if (isUp && priceChangePercent > 0.02) {
-        // Strong upward move - create big green candles
-        const volatility = Math.random();
+      const isStrongMoveUp = priceChange >= 0 && priceChangePercent > 0.02;
+      const isStrongMoveDown = priceChange < 0 && priceChangePercent > 0.02;
+      const volatility = Math.random();
+
+      if (isStrongMoveUp) {
         if (volatility < 0.3) {
-          // Long green candle (30% chance)
           open = +(prevPrice + (Math.random() - 0.8) * baseRange * 0.3).toFixed(
             4
           );
@@ -205,7 +219,6 @@
           ).toFixed(4);
           low = +(open - Math.random() * baseRange * 0.1).toFixed(4);
         } else if (volatility < 0.5) {
-          // Spiky upward candle with long upper wick (20% chance)
           open = +(prevPrice + (Math.random() - 0.5) * baseRange * 0.4).toFixed(
             4
           );
@@ -220,7 +233,6 @@
             Math.random() * baseRange * 0.2
           ).toFixed(4);
         } else {
-          // Normal but strong upward move (50% chance)
           open = +(prevPrice + (Math.random() - 0.6) * baseRange * 0.5).toFixed(
             4
           );
@@ -234,9 +246,7 @@
             Math.random() * baseRange * 0.3
           ).toFixed(4);
         }
-      } else if (!isUp && priceChangePercent > 0.02) {
-        // Strong downward move
-        const volatility = Math.random();
+      } else if (isStrongMoveDown) {
         open = +(prevPrice + (Math.random() - 0.2) * baseRange * 0.5).toFixed(
           4
         );
@@ -250,10 +260,7 @@
           Math.abs(priceChange) * 0.3
         ).toFixed(4);
       } else {
-        // Normal volatility
-        const volatility = Math.random();
-        if (volatility < 0.15 && isUp) {
-          // Occasionally create a big green candle (15% chance when up)
+        if (volatility < 0.15 && priceChange >= 0) {
           open = +(prevPrice + (Math.random() - 0.7) * baseRange * 0.4).toFixed(
             4
           );
@@ -265,7 +272,6 @@
           ).toFixed(4);
           low = +(open - Math.random() * baseRange * 0.15).toFixed(4);
         } else {
-          // Standard candle
           open = +(prevPrice + (Math.random() - 0.5) * baseRange * 0.6).toFixed(
             4
           );
@@ -280,11 +286,12 @@
         }
       }
 
-      // Ensure high >= max(open, close) and low <= min(open, close)
       high = Math.max(high, Math.max(open, close));
       low = Math.min(low, Math.min(open, close));
 
-      return { open, close, high, low };
+      const color = close >= open ? '#10b981' : '#f87171';
+
+      return { open, close, high, low, color };
     });
   }
 
@@ -323,7 +330,8 @@
       const wickTop = bodyTop - (bodyTop - origWickTop) * 0.6;
       const wickBottom = bodyBottom + (origWickBottom - bodyBottom) * 0.6;
       const bodyH = Math.max(4, bodyBottom - bodyTop);
-      const color = c.close >= c.open ? '#10b981' : '#f87171';
+
+      const color = c.color;
 
       updateCandleStores(i, bodyTop, bodyH, wickTop, wickBottom);
 
@@ -402,7 +410,6 @@
       .join(' ');
   }
 
-  // Trading functions
   function buy() {
     const qty = Number(orderQty) || 0;
     const cost = price * qty;
@@ -417,23 +424,27 @@
       return;
     }
 
-    // Determine behavior based on previous holdings
     const hadHoldings = holdings > 0;
 
     balance = +(balance - cost).toFixed(2);
     holdings = +(holdings + qty);
 
+    if (!hadHoldings) {
+      entryPrice = price;
+    } else {
+      entryPrice = (entryPrice * (holdings - qty) + price * qty) / holdings;
+    }
+
+    liquidationPrice = +(entryPrice * 0.5).toFixed(4);
+
     addTrade('Buy', qty, price);
 
     if (!hadHoldings) {
-      // Start downward pressure immediately (upward pressure blocked when holdings > 0)
       applyPressure('down', { ticks: 16, factor: 0.18 });
     } else {
-      // If user already had holdings, push price down and sustain drop
       applyPressure('down', { ticks: 16, factor: 0.18 });
     }
 
-    // Success message suppressed per request
     flashBalance('flash-buy');
   }
 
@@ -456,16 +467,15 @@
 
     addTrade('Sell', qty, price);
 
-    // If selling reduces holdings to zero, apply strong upward pressure
     if (holdings <= 0) {
+      entryPrice = 0;
+      liquidationPrice = 0;
       applyPressure('up', { ticks: 25, factor: 0.35 });
       setSustainedPressure('up', 30, 0.15);
     } else {
-      // If user still holds, maintain downward pressure
       applyPressure('down', { ticks: 10, factor: 0.08 });
     }
 
-    // Success message suppressed per request
     flashBalance('flash-sell');
   }
 
@@ -473,7 +483,6 @@
     direction: 'up' | 'down',
     opts: { ticks?: number; factor?: number } = {}
   ) {
-    // If user has holdings, prevent upward pressure
     if (holdings > 0 && direction === 'up') {
       return;
     }
@@ -496,13 +505,11 @@
     price = newPrice;
   }
 
-  // Set a sustained pressure bias without an immediate price jump (used so spikes remain visible)
   function setSustainedPressure(
     direction: 'up' | 'down',
     ticks = 5,
     factor = 0.08
   ) {
-    // If user has holdings, prevent upward pressure
     if (holdings > 0 && direction === 'up') {
       return;
     }
@@ -513,7 +520,11 @@
       (direction === 'up' ? 1 : -1) * Math.max(0.01, immediateChange * 0.5);
   }
 
-  function addTrade(type: 'Buy' | 'Sell', qty: number, priceVal: number) {
+  function addTrade(
+    type: 'Buy' | 'Sell' | 'Liquidation',
+    qty: number,
+    priceVal: number
+  ) {
     const newTrade = {
       id: Date.now() + Math.random(),
       type,
@@ -543,22 +554,25 @@
     balanceFlashTimer = setTimeout(() => (balanceFlash = ''), 700);
   }
 
-  // Utility functions
   function fmt(n: number): string {
     if (typeof n !== 'number') return String(n);
     return n < 1 ? n.toFixed(4) : n.toFixed(2);
   }
 
-  // Reactive statements
   $: candlesRaw = generateCandles(prices);
   $: ({ min: minPrice, max: maxPrice } = calculateChartBounds(candlesRaw));
   $: candleData = createCandleData(candlesRaw);
   $: maxVol = Math.max(...volumes);
-  $: volumesData = volumes.map((v, i) => ({
-    x: CHART.PADDING + i * spacing + (spacing - CHART.CANDLE_WIDTH) / 2,
-    h: Math.max(2, Math.round((v / maxVol) * 40)),
-    color: prices[i] >= (prices[i - 1] || prices[i]) ? '#10b981' : '#f87171',
-  }));
+  $: volumesData = volumes.map((v, i) => {
+    const candle = candlesRaw[i];
+    const color = candle && candle.close >= candle.open ? '#10b981' : '#f87171';
+
+    return {
+      x: CHART.PADDING + i * spacing + (spacing - CHART.CANDLE_WIDTH) / 2,
+      h: Math.max(2, Math.round((v / maxVol) * 40)),
+      color,
+    };
+  });
 
   $: ema5Path = createEMAPath(prices, 5);
   $: ema10Path = createEMAPath(prices, 10);
@@ -583,7 +597,11 @@
     priceSlideTimer = setTimeout(() => (priceSlide = false), 480);
   }
 
-  // Lifecycle
+  $: currentLoss =
+    holdings > 0 && entryPrice > 0
+      ? ((entryPrice - price) / entryPrice) * 100
+      : 0;
+
   let timer: ReturnType<typeof setInterval>;
   onMount(() => {
     timer = setInterval(updatePrice, 1000);
@@ -850,11 +868,11 @@
       </div>
 
       <div class="mt-4 flex flex-col gap-4 pr-0">
-        <!-- Row 1: Balance (full width) -->
         <div
           class="relative bg-linear-to-br from-[#0f1720] to-[#0b0b0d] px-4 py-4 rounded-md border border-neutral-800 shadow-sm w-full"
           class:flash-buy={balanceFlash === 'flash-buy'}
           class:flash-sell={balanceFlash === 'flash-sell'}
+          class:flash-liquidation={balanceFlash === 'flash-liquidation'}
         >
           <div class="text-xs text-gray-400">Balance</div>
           <div class="text-white font-bold text-2xl">
@@ -864,8 +882,6 @@
             Holdings: {holdings.toFixed(4)}
           </div>
         </div>
-
-        <!-- Row 2: Controls (leverage, qty, estimated, buy/sell) -->
         <div class="flex flex-wrap items-center gap-4 w-full">
           <div class="flex items-center gap-3">
             <button
@@ -873,7 +889,7 @@
               aria-disabled="true"
               title="Leverage (fixed)"
             >
-              <span class="text-sm font-medium">5x</span>
+              <span class="text-sm font-medium">2x</span>
               <span class="ml-1 text-gray-400">▾</span>
             </button>
 
@@ -912,8 +928,6 @@
             >
           </div>
         </div>
-
-        <!-- Row 3: Order History (full width, taller) -->
         <div
           class="w-full bg-linear-to-br from-[#0f1720] to-[#0b0b0d] px-3 py-3 rounded-md border border-neutral-800 shadow-sm"
         >
@@ -931,15 +945,21 @@
             {#each trades as t (t.id)}
               <div
                 class="trade-entry flex items-center justify-between text-sm"
+                class:liquidation-entry={t.type === 'Liquidation'}
               >
                 <div class="flex items-center gap-2">
                   <span
                     class="w-2 h-2 rounded-full"
                     style="background:{t.type === 'Buy'
                       ? '#10b981'
-                      : '#ef4444'}"
+                      : t.type === 'Sell'
+                        ? '#ef4444'
+                        : '#fbbf24'}"
                   ></span>
-                  <div class="text-gray-200">
+                  <div
+                    class:text-yellow-400={t.type === 'Liquidation'}
+                    class:text-gray-200={t.type !== 'Liquidation'}
+                  >
                     {t.type} <span class="text-gray-400">{t.qty}</span>
                   </div>
                 </div>
@@ -956,7 +976,6 @@
   </div>
 </section>
 
-<!-- Toast Notification -->
 {#if toastVisible && tradeMsg}
   <div
     class="toast-notification"
@@ -964,6 +983,7 @@
     class:toast-error={tradeMsg.includes('Insufficient') ||
       tradeMsg.includes('Not enough') ||
       tradeMsg.includes('Enter')}
+    class:toast-liquidation={tradeMsg.includes('청산')}
   >
     {tradeMsg}
   </div>
@@ -982,7 +1002,6 @@
     width: 100%;
   }
 
-  /* Chart styling */
   .chart-wrap {
     max-width: 100%;
     width: 100%;
@@ -995,7 +1014,7 @@
     height: auto;
     aspect-ratio: 3 / 1;
     display: block;
-    overflow: visible; /* allow small labels to remain visible on narrow viewports */
+    overflow: visible;
   }
 
   @media (max-width: 640px) {
@@ -1005,7 +1024,6 @@
     }
   }
 
-  /* EMA lines */
   .ema-line {
     transition:
       opacity 0.25s ease,
@@ -1013,7 +1031,6 @@
     vector-effect: non-scaling-stroke;
   }
 
-  /* SVG text */
   svg text {
     font-family: Inter, Arial, sans-serif;
     font-size: 12px;
@@ -1042,7 +1059,6 @@
     }
   }
 
-  /* Price animation */
   .slide {
     animation: slideDown 480ms cubic-bezier(0.2, 0.8, 0.2, 1);
     display: inline-block;
@@ -1059,7 +1075,6 @@
     }
   }
 
-  /* Trading controls */
   .trade-btn {
     padding: 0.5rem 1.1rem;
     height: 44px;
@@ -1112,26 +1127,33 @@
     }
   }
 
-  /* Trade history */
   .trade-entry {
     padding: 0.45rem 0.25rem;
     border-radius: 6px;
     transition: background-color 120ms ease;
-    animation: entry 360ms cubic-bezier(0.2, 0.9, 0.2, 1) forwards; /* ← forwards 추가 */
+    animation: entry 360ms cubic-bezier(0.2, 0.9, 0.2, 1) forwards;
   }
 
   .trade-entry:hover {
     background: rgba(255, 255, 255, 0.02);
   }
 
+  .liquidation-entry {
+    background: rgba(251, 191, 36, 0.05);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+  }
+
   @keyframes entry {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
     to {
       opacity: 1;
       transform: translateY(0);
     }
   }
 
-  /* Scrollbar for history */
   .max-h-64::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -1142,7 +1164,6 @@
     border-radius: 6px;
   }
 
-  /* Balance flash effects */
   .flash-buy {
     box-shadow:
       0 6px 24px rgba(16, 185, 129, 0.08),
@@ -1155,11 +1176,31 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.02);
   }
 
+  .flash-liquidation {
+    box-shadow:
+      0 6px 24px rgba(251, 191, 36, 0.3),
+      inset 0 1px 0 rgba(251, 191, 36, 0.1);
+    animation: liquidationPulse 700ms ease;
+  }
+
+  @keyframes liquidationPulse {
+    0%,
+    100% {
+      box-shadow:
+        0 6px 24px rgba(251, 191, 36, 0.3),
+        inset 0 1px 0 rgba(251, 191, 36, 0.1);
+    }
+    50% {
+      box-shadow:
+        0 8px 32px rgba(251, 191, 36, 0.5),
+        inset 0 1px 0 rgba(251, 191, 36, 0.2);
+    }
+  }
+
   .shadow {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
   }
 
-  /* Toast Notification */
   .toast-notification {
     position: fixed;
     top: 20px;
@@ -1197,5 +1238,13 @@
     box-shadow:
       0 8px 32px rgba(239, 68, 68, 0.2),
       0 0 0 1px rgba(248, 113, 113, 0.2);
+  }
+
+  .toast-notification.toast-liquidation {
+    background: linear-gradient(135deg, #92400e 0%, #b45309 100%);
+    border-color: rgba(251, 191, 36, 0.4);
+    box-shadow:
+      0 8px 32px rgba(251, 191, 36, 0.3),
+      0 0 0 1px rgba(251, 191, 36, 0.2);
   }
 </style>
