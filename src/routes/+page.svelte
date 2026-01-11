@@ -674,13 +674,13 @@
             class="w-1/2 sm:w-auto bg-linear-to-br from-[#0f1720] to-[#0b0b0d] px-3 py-2 rounded-md border border-neutral-800 text-right shadow-sm"
           >
             <div class="text-xs text-gray-400">24h High</div>
-            <div class="text-white font-semibold">3,102.60</div>
+            <div class="text-white font-semibold">11.20</div>
           </div>
           <div
             class="w-1/2 sm:w-auto bg-linear-to-br from-[#0f1720] to-[#0b0b0d] px-3 py-2 rounded-md border border-neutral-800 text-right shadow-sm"
           >
             <div class="text-xs text-gray-400">24h Low</div>
-            <div class="text-white font-semibold">3,076.98</div>
+            <div class="text-white font-semibold">0.0001</div>
           </div>
         </div>
       </div>
