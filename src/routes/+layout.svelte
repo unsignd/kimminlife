@@ -1,12 +1,13 @@
 <script lang="ts">
-  import favicon from '$lib/assets/favicon.svg';
+  import logo from '$lib/assets/logo.svg';
   import '../app.css';
 
   let { children } = $props();
 </script>
 
 <svelte:head>
-  <link rel="icon" href={favicon} />
+  <link rel="icon" href={logo} />
+  <title>시발거래소</title>
 </svelte:head>
 
 <div
@@ -15,7 +16,7 @@
   <div
     class="
       h-full
-      max-w-[1000px]
+      max-w-250
       mx-auto
       px-4 lg:px-8
       text-white
